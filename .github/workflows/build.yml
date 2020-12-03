@@ -13,6 +13,7 @@ jobs:
     timeout-minutes: 10
 
     env:
+      PG_BSD_INDENT_DIR: /home/runner/pg_bsd_indent
       PG_BUILD_DIR: /home/runner/build
       PG_BUILD_PARALLELISM: 2
       PG_DATA_DIR: /home/runner/data
@@ -32,21 +33,49 @@ jobs:
 
       - name: "make"
         run: make -j$PG_BUILD_PARALLELISM -s
+        env:
+          CFLAGS: "-fuse-ld=gold" # Linux only
 
       - name: "make install"
         run: make -j$PG_BUILD_PARALLELISM -s install
 
-      - name: "Initialize data directory"
-        run: $PG_BUILD_DIR/bin/initdb -D $PG_DATA_DIR
+    # - name: "Initialize data directory"
+    #   run: $PG_BUILD_DIR/bin/initdb -D $PG_DATA_DIR
 
-      - name: "Start Postgres"
-        run: $PG_BUILD_DIR/bin/postgres -D $PG_DATA_DIR -p $PGPORT >$PG_LOG_FILE 2>&1 &
+    # - name: "Start Postgres"
+    #   run: $PG_BUILD_DIR/bin/postgres -D $PG_DATA_DIR -p $PGPORT >$PG_LOG_FILE 2>&1 &
 
-      - name: "Wait for Postgres"
+    # - name: "Wait for Postgres"
 
         # We should probably get fancier here and try a psql every second for N
         # times so that we're not using as blunt of a tool as a sleep X.
-        run: sleep 5
+    #   run: sleep 5
 
-      - name: "Run tests (make installcheck-parallel)"
-        run:  make installcheck-parallel
+    # - name: "Run tests (make installcheck-parallel)"
+    #   run:  make installcheck-parallel
+
+      - name: "Fetch pg_bsd_indent"
+        run: git clone https://git.postgresql.org/git/pg_bsd_indent.git $PG_BSD_INDENT_DIR/
+
+      - name: "Build pg_bsd_indent"
+        run: |
+          cd $PG_BSD_INDENT_DIR/
+          make PG_CONFIG=$PG_BUILD_DIR/bin/pg_config
+
+    # - name: "Install pg_bsd_indent"
+    #   run: |
+    #     cd $PG_BSD_INDENT_DIR/
+
+          # adds it to Postgres installation directory
+    #     make PG_CONFIG=$PG_BUILD_DIR/bin/pg_config install
+
+      - name: "Get latest typedefs from build farm"
+        run: curl -o src/tools/pgindent/typedefs.list https://buildfarm.postgresql.org/cgi-bin/typedefs.pl
+
+      - name: ls
+        run: ls $PG_BSD_INDENT_DIR/
+
+      - name: "pgindent"
+        run: src/tools/pgindent/pgindent
+        env:
+          PGINDENT: $PG_BSD_INDENT_DIR/pg_bsd_indent
