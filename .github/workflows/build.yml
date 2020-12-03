@@ -7,34 +7,86 @@ on:
     # at 08:00 on Sunday
     - cron: "0 8 * * 0"
 
+env:
+  PG_BUILD_PARALLELISM: 2
+
+  # no underscores because this is a "magic" Postgres variable natively
+  # understood by many Postgres utilities
+  PGPORT: 5433
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
 
-    env:
-      PG_BSD_INDENT_DIR: /home/runner/pg_bsd_indent
-      PG_BUILD_DIR: /home/runner/build
-      PG_BUILD_PARALLELISM: 2
-      PG_DATA_DIR: /home/runner/data
-      PG_LOG_FILE: /home/runner/postgres.log
+    strategy:
+      matrix:
+        # `-fuse-ld=gold` (Gold linker) is Linux only
+        #
+        # x86_64-pc-linux-gnu
+        # x86_64-apple-darwin19.6.0
+        include:
+          - os: macos-latest
+            CC: clang
+            # CONFIGURE_HOST: arm-linux-gnu
 
-      # no underscores because this is a "magic" Postgres variable natively
-      # understood by many Postgres utilities
-      PGPORT: 5433
+          - os: ubuntu-latest
+            CC: clang
+            CFLAGS: "-fuse-ld=gold"
+            # CONFIGURE_HOST: x86_64-pc-linux-gnu
+
+          - os: windows-latest
+            BISON: win_bison
+            # CONFIGURE_HOST: arm-linux-gnu
+
+    defaults:
+      run:
+        shell: bash # for Windows
 
     steps:
       - uses: actions/checkout@v2
         with:
           repository: postgres/postgres
 
+      - run: /usr/bin/perl --version
+
+      # We use this instead of an env configuration so that we can expand
+      # variables into the values of the new variables.
+      - name: "Set environmental variables"
+        run: |
+          echo "PG_BSD_INDENT_DIR=$HOME/pg_bsd_indent" >> $GITHUB_ENV
+          echo "PG_BUILD_DIR=$HOME/build" >> $GITHUB_ENV
+          echo "PG_DATA_DIR=$HOME/data" >> $GITHUB_ENV
+          echo "PG_LOG_FILE=$HOME/postgres.log" >> $GITHUB_ENV
+
+      - name: "Cache Chocolately on Windows"
+        if: matrix.os == 'windows-latest'
+        uses: actions/cache@v2
+        with:
+          path: C:\Users\runneradmin\AppData\Local\Temp\chocolatey
+          key: ${{ runner.os }}-chocolatey-${{ matrix.os }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-chocolatey-${{ matrix.os }}-
+            ${{ runner.os }}-chocolatey-
+
+      - name: "Install Bison with Chocolatey on Windows"
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install --no-progress winflexbison3
+
       - name: "./configure"
+        # run: ./configure --host $CONFIGURE_HOST --prefix $PG_BUILD_DIR
         run: ./configure --prefix $PG_BUILD_DIR
+        env:
+          BISON: ${{ matrix.BISON }}
+          CC: ${{ matrix.CC }}
+          CFLAGS: ${{ matrix.CFLAGS }}
+          # CONFIGURE_HOST: ${{ matrix.CONFIGURE_HOST }}
 
       - name: "make"
         run: make -j$PG_BUILD_PARALLELISM -s
         env:
-          CFLAGS: "-fuse-ld=gold" # Linux only
+          CFLAGS: ${{ matrix.CFLAGS }}
 
       - name: "make install"
         run: make -j$PG_BUILD_PARALLELISM -s install
@@ -54,6 +106,35 @@ jobs:
       - name: "Run tests (make installcheck-parallel)"
         run:  make installcheck-parallel
 
+  pgindent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      CC: clang
+      CFLAGS: "-fuse-ld=gold"
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          repository: postgres/postgres
+
+      # We use this instead of an env configuration so that we can expand
+      # variables into the values of the new variables.
+      - name: "Set environmental variables"
+        run: |
+          echo "PG_BSD_INDENT_DIR=$HOME/pg_bsd_indent" >> $GITHUB_ENV
+          echo "PG_BUILD_DIR=$HOME/build" >> $GITHUB_ENV
+
+      - name: "./configure"
+        run: ./configure --prefix $PG_BUILD_DIR
+
+      - name: "make"
+        run: make -j$PG_BUILD_PARALLELISM -s
+
+      - name: "make install"
+        run: make -j$PG_BUILD_PARALLELISM -s install
+
       - name: "Fetch pg_bsd_indent"
         run: git clone https://git.postgresql.org/git/pg_bsd_indent.git $PG_BSD_INDENT_DIR/
 
@@ -66,6 +147,4 @@ jobs:
         run: curl -o src/tools/pgindent/typedefs.list https://buildfarm.postgresql.org/cgi-bin/typedefs.pl
 
       - name: "pgindent"
-        run: src/tools/pgindent/pgindent
-        env:
-          PGINDENT: $PG_BSD_INDENT_DIR/pg_bsd_indent
+        run: PGINDENT=$PG_BSD_INDENT_DIR/pg_bsd_indent src/tools/pgindent/pgindent
